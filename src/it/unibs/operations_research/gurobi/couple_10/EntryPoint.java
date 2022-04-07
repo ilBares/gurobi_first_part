@@ -108,10 +108,7 @@ public class EntryPoint {
         // adding slack surplus variables
         GRBVar[] s = addSlackSurplusVariables(model);
 
-
-
-
-
+        setObjectiveFunction(model, x_ij);
     }
 
     private static void setParameters(GRBEnv env) throws GRBException {
@@ -155,5 +152,35 @@ public class EntryPoint {
             s[i] = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "s_" + i);
 
         return s;
+    }
+
+    private static void setObjectiveFunction(GRBModel model, GRBVar[][] x_ij) throws GRBException {
+        GRBLinExpr sum = new GRBLinExpr();
+        GRBLinExpr reverse_sum = new GRBLinExpr();
+
+        // 1.0 indicates the coefficient of the aux_var in our objective function
+        GRBVar aux_var = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "aux");
+
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < K; j++) {
+                int sign = (j < (K/2) ? 1 : -1);
+                sum.addTerm(sign * P_ij[i][j], x_ij[i][j]);
+                reverse_sum.addTerm((-1 * sign) * P_ij[i][j], x_ij[i][j]);
+            }
+        }
+
+        model.addConstr(aux_var, GRB.GREATER_EQUAL, sum, "c_aux1");
+        model.addConstr(aux_var, GRB.GREATER_EQUAL, reverse_sum, "c_aux2");
+
+        GRBLinExpr objFunc = new GRBLinExpr();
+        objFunc.addTerm(1.0, aux_var);
+
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < K; j++) {
+                objFunc.addTerm(P_ij[i][j], x_ij[i][j]);
+            }
+        }
+
+        model.setObjective(objFunc, GRB.MINIMIZE);
     }
 }

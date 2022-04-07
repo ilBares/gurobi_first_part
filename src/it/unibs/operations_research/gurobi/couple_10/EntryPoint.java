@@ -1,6 +1,8 @@
 package it.unibs.operations_research.gurobi.couple_10;
 import gurobi.*;
 
+import java.util.Arrays;
+
 public class EntryPoint {
     // number of television station
     private static final int M = 10;
@@ -76,6 +78,13 @@ public class EntryPoint {
             {911, 2714, 2837, 3135, 3007, 409, 898, 1598}
     };
 
+
+    // total budget
+    private static final int B_TOT = Arrays.stream(B_i).sum();
+
+    // 2% of the total budget
+    private static final double B_PCT = (B_TOT/100.)*2;
+
     public static void main(String[] args) throws GRBException {
         // GRBEve stands for 'Gurobi Environment'
         // we will add parameters to the environment to solve problems
@@ -86,15 +95,65 @@ public class EntryPoint {
         // GRB.DoubleParam.TimeLimit    # time limit dedicated to Gurobi to solve our problem
         GRBEnv env = new GRBEnv("gurobi_first_part.log");
 
+        // it sets necessary parameters
+        setParameters(env);
+
+        // a model represents a single optimization problem
+        // it contains set of variables, set of constraints, one objective function and others attributes
+        GRBModel model = new GRBModel(env);
+
+        // adding x_ij variables
+        GRBVar[][] x_ij = addVariables(model);
+
+        // adding slack surplus variables
+        GRBVar[] s = addSlackSurplusVariables(model);
+
+
+
+
+
+    }
+
+    private static void setParameters(GRBEnv env) throws GRBException {
         // we can set solve method used by Gurobi
         // '0' stands for "primal simplex"
         env.set(GRB.IntParam.Method, 0);
 
         // we choose to disable gurobi presolve option
-        // to avoid unexpected changes
+        // it is necessary to avoid unexpected changes
         env.set(GRB.IntParam.Presolve, 0);
+    }
 
+    private static GRBVar[][] addVariables(GRBModel model) throws GRBException {
+        // "i": index to the television station (0 ... M-1)
+        // "j": index to the time slot (0 ... K-1)
+        GRBVar[][] x_ij = new GRBVar[M][K];
 
+        for (int i=0; i<M; i++) {
+            for (int j = 0; i < K; i++) {
+                // 'addVar' is required to add variables
+                // first parameter represents the 'lower bound | lb' - in that case 0.0
+                // second parameter represents the 'upper bound | ub' - in that case τ_ij
+                // third parameter represents the coefficient of the variable in our objective function
+                // the third parameter set to 0 is temporary, we will change it building objective function
+                // fourth parameter represents the type of the variable
+                // fifth parameter represents the name of the variable
+                x_ij[i][j] = model.addVar(0.0, T_ij[i][j], 0.0, GRB.CONTINUOUS, "xij_" + (i + 1) + "_" + (j + 1));
+            }
+        }
 
+        return x_ij;
+    }
+
+    private static GRBVar[] addSlackSurplusVariables(GRBModel model) throws GRBException {
+        // M == Bi.length() : constraints related to the maximum budget for each television station
+        // K : constraints related to minimum budget for each time slot
+        // 1 : constraint related to minimum total number of spectators (daily)
+        GRBVar[] s = new GRBVar[M + K + 1];
+
+        for (int i = 0; i < (M + K + 1); i++)
+            s[i] = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "s_" + i);
+
+        return s;
     }
 }

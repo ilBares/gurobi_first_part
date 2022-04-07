@@ -108,7 +108,39 @@ public class EntryPoint {
         // adding slack surplus variables
         GRBVar[] s = addSlackSurplusVariables(model);
 
+        // adding budget constraints
+        addBudgetConstraints(model, x_ij, s);
+
+        // adding minimum spectators number
+        addSpectatorsConstraint(model, x_ij, s);
+
         setObjectiveFunction(model, x_ij);
+
+        model.update();
+        // to optimize our model
+        model.optimize();
+
+        //////////////////
+        int status = model.get(GRB.IntAttr.Status);
+
+        // results can be analyzed with '<constraint>.get(...)' or 'model.get(...)'
+        // result of optimization is contained in 'Status' attribute
+        // 'GRB.StringAttr.VarName' is the name of the variable
+        // 'GRB.DoubleAttr.X' contains the value of the variable in current solution
+        // 'GRB.DoubleAttr.ObjVal' contains the value of the objective function in current solution
+        model.get(GRB.DoubleAttr.ObjVal);
+
+        System.out.println("\n\nStatus: " + status);
+
+        printHeader();
+
+        printFirstQuestion(model, 0 , 0, 0);
+
+        // Release the resources associated with a GRBModel object
+        model.dispose();
+
+        // Release the resources associated with a GRBEnv object
+        env.dispose();
     }
 
     private static void setParameters(GRBEnv env) throws GRBException {
@@ -127,7 +159,7 @@ public class EntryPoint {
         GRBVar[][] x_ij = new GRBVar[M][K];
 
         for (int i=0; i<M; i++) {
-            for (int j = 0; i < K; i++) {
+            for (int j = 0; j < K; j++) {
                 // 'addVar' is required to add variables
                 // first parameter represents the 'lower bound | lb' - in that case 0.0
                 // second parameter represents the 'upper bound | ub' - in that case τ_ij
@@ -175,12 +207,67 @@ public class EntryPoint {
         GRBLinExpr objFunc = new GRBLinExpr();
         objFunc.addTerm(1.0, aux_var);
 
-        for (int i = 0; i < M; i++) {
-            for (int j = 0; j < K; j++) {
-                objFunc.addTerm(P_ij[i][j], x_ij[i][j]);
-            }
-        }
-
         model.setObjective(objFunc, GRB.MINIMIZE);
     }
+
+    private static void addBudgetConstraints(GRBModel model, GRBVar[][] x_ij, GRBVar[] s) throws GRBException {
+        GRBLinExpr expr;
+
+        // maximum budget for each television station
+        for (int i = 0; i < M; i++) {
+            expr = new GRBLinExpr();
+            for (int j = 0; j < K; j++) {
+                expr.addTerm(C_ij[i][j], x_ij[i][j]);
+            }
+            // adding slack
+            expr.addTerm(1, s[i]);
+            model.addConstr(expr, GRB.EQUAL, B_i[i], "c_max_budget_" + (i+1));
+        }
+
+        // minimum budget for each time slot
+        for (int j = 0; j < K; j++) {
+            expr = new GRBLinExpr();
+            for (int i = 0; i < M; i++) {
+                expr.addTerm(C_ij[i][j], x_ij[i][j]);
+            }
+            // adding slack
+            expr.addTerm(-1.0, s[M+j]);
+            model.addConstr(expr, GRB.EQUAL, B_PCT, "c_min_budget_" + (j+1));
+        }
+    }
+
+    private static void addSpectatorsConstraint(GRBModel model, GRBVar[][] x_ij, GRBVar[] s) throws GRBException {
+        GRBLinExpr expr = new GRBLinExpr();
+
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < K; j++) {
+                expr.addTerm(P_ij[i][j], x_ij[i][j]);
+            }
+        }
+        expr.addTerm(-1.0, s[M+K]);
+        model.addConstr(expr, GRB.EQUAL, S, "c_spectators");
+    }
+
+
+    private static void printHeader() {
+        System.out.println("GRUPPO 10\n" +
+                "Componenti: Baresi, El Koudri");
+    }
+
+    private static void printFirstQuestion(GRBModel model, int fullCoverage, double purchasedTime, double unusedBudget) throws GRBException {
+        String solution = "QUESITO I:\n" +
+                "funzione obiettivo = " + model.get(GRB.DoubleAttr.ObjVal) + "\n" +
+                "copertura raggiunta totale (spettatori) = " + fullCoverage + "\n" +
+                "tempo acquistato (minuti) = " + purchasedTime + "\n" +
+                "budget inutilizzato = " + unusedBudget + "\n" +
+                "soluzione di base ottima:\n";
+
+        for (GRBVar v : model.getVars()) {
+            solution += "\n" + v.get(GRB.StringAttr.VarName) + " = " + v.get(GRB.DoubleAttr.X);
+        }
+
+        System.out.println(solution);
+    }
+
+
 }

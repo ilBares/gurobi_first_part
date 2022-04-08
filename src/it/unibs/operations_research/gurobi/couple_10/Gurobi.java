@@ -334,7 +334,7 @@ public class Gurobi {
         }
 
         GRBConstr[] constrs = model.getConstrs();
-        for (int i = M*K; i < (M*K + constrs.length); i++) {
+        for (int i = M*K; i < (M*K + constrs.length-1); i++) {
             if (model.getVar(i).get(GRB.DoubleAttr.X) == 0)
                 // constraints of the optimal vertex
                 constrOpVertex += constrs[i - M*K].get(GRB.StringAttr.ConstrName) + ", ";

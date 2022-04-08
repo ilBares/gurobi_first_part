@@ -1,20 +1,31 @@
 package it.unibs.operations_research.gurobi.couple_10;
-import gurobi.*;
 
+import gurobi.*;
 import java.util.Arrays;
 
-public class EntryPoint {
+/**
+ * Gurobi Project part I.
+ *
+ * @author Baresi Marco
+ * @author El Koudri Chaimaa
+ */
+public class Gurobi {
     // number of television station
     private static final int M = 10;
 
     // number of time slots for each television station
     private static final int K = 8;
 
+    // M == Bi.length() : number of constraints related to the maximum budget for each television station
+    // K : number of constraints related to minimum budget for each time slot
+    // 1 : number of constraint related to minimum total number of spectators (daily)
+    private static final int SLACK_NUM = M + K + 1;
+
     // minimum daily number of spectators (coverage)
     private static final int S = 86236;
 
-    // Ω% (Omega) - percentage of the minimum budget to invest in each time slot
-    private static final int O = 2;
+    // Ω% (Omega) - percentage of the minimum budget to invest in each time slot (2%)
+    private static final double O = 0.02;
 
     // β_i - maximum budget for the i-th television station
     private static final int [] B_i = {
@@ -46,7 +57,7 @@ public class EntryPoint {
             {2, 2, 2, 2, 3, 3, 1, 2}
     };
 
-    // Cost euro/minute of each time slot
+    // cost euro/minute of each time slot
     // "i": index to the television station
     // "j": index to the time slot
     private static final int [][] C_ij = {
@@ -62,7 +73,7 @@ public class EntryPoint {
             {1101, 1354, 1381, 1026, 1374, 986, 1067, 1149}
     };
 
-    // Coverage of spectators (spectators/minute) guaranteed by spending C_ij euro/minute
+    // coverage of spectators (spectators/minute) guaranteed by spending C_ij euro/minute
     // "i": index to the television station
     // "j": index to the time slot
     private static final int [][] P_ij = {
@@ -79,45 +90,32 @@ public class EntryPoint {
     };
 
 
-    // total budget
+    // total budget = sum of maximum budgets of the i-th television station
     private static final int B_TOT = Arrays.stream(B_i).sum();
 
-    // 2% of the total budget
-    private static final double B_PCT = (B_TOT/100.)*O;
+    // 2% of the total budget = B_TOT * 0.02
+    private static final double B_PCT = B_TOT*O;
 
+    // entry point for our Gurobi Project
     public static void main(String[] args) throws GRBException {
         // GRBEve stands for 'Gurobi Environment'
         // we will add parameters to the environment to solve problems
         // to set parameters: 'env.set(<parameter>, <value>)'
         // main parameters are:
         // GRB.IntParam.Threads         # number of Threads used by Gurobi
-        // GRB.IntParam.Presolve        # operations before the executions of our model - speedup the execution
+        // GRB.IntParam.Presolve        # operations before the executions of our model - it speedups the execution
         // GRB.DoubleParam.TimeLimit    # time limit dedicated to Gurobi to solve our problem
         GRBEnv env = new GRBEnv("gurobi_first_part.log");
 
-        // it sets necessary parameters
+        // setting necessary parameters
         setParameters(env);
 
         // a model represents a single optimization problem
         // it contains set of variables, set of constraints, one objective function and others attributes
-        GRBModel model = new GRBModel(env);
-
-        // adding x_ij variables
-        GRBVar[][] x_ij = addVariables(model);
-
-        // adding slack surplus variables
-        GRBVar[] s = addSlackSurplusVariables(model);
-
-        // adding budget constraints
-        addBudgetConstraints(model, x_ij, s, null, false);
-
-        // adding minimum spectators number
-        addSpectatorsConstraint(model, x_ij, s, null, false);
-
-        setObjectiveFunction(model, x_ij);
+        GRBModel model = generateModel(env, false);
 
         // function to solve all required problems
-        solve(model, s.length);
+        solve(env, model);
 
         // Release the resources associated with a GRBModel object
         model.dispose();
@@ -134,6 +132,41 @@ public class EntryPoint {
         // we choose to disable gurobi presolve option
         // it is necessary to avoid unexpected changes
         env.set(GRB.IntParam.Presolve, 0);
+    }
+
+    private static GRBModel generateModel(GRBEnv env, boolean isAuxiliary) throws GRBException {
+        // a model represents a single optimization problem
+        // it contains set of variables, set of constraints, one objective function and others attributes
+        GRBModel model = new GRBModel(env);
+
+        // adding x_ij variables
+        GRBVar[][] x_ij = addVariables(model);
+
+        // adding slack surplus variables
+        // "s" stands for "slack"
+        GRBVar[] s = addAdditionalVariables(model, "s");
+
+        GRBVar[] y = null;
+        if (isAuxiliary)
+            // required to set auxiliary variables with the aim of finding a feasible solution that is not optimal
+            y = addAdditionalVariables(model, "a");
+
+        // adding budget constraints
+        addBudgetConstraints(model, x_ij, s, y, isAuxiliary);
+
+        // adding minimum spectators number
+        addSpectatorsConstraint(model, x_ij, s, y, isAuxiliary);
+
+        if (isAuxiliary)
+            setAuxiliaryObjectiveFunction(model, y);
+        else
+            setObjectiveFunction(model, x_ij);
+
+        model.update();
+        // to optimize our model
+        model.optimize();
+
+        return model;
     }
 
     private static GRBVar[][] addVariables(GRBModel model) throws GRBException {
@@ -157,66 +190,14 @@ public class EntryPoint {
         return x_ij;
     }
 
-    private static GRBVar[] addSlackSurplusVariables(GRBModel model) throws GRBException {
-        // M == Bi.length() : constraints related to the maximum budget for each television station
-        // K : constraints related to minimum budget for each time slot
-        // 1 : constraint related to minimum total number of spectators (daily)
-        GRBVar[] s = new GRBVar[M + K + 1];
+    // used to add slack variables and auxiliary variables
+    private static GRBVar[] addAdditionalVariables(GRBModel model, String baseVarName) throws GRBException {
+        GRBVar[] vars = new GRBVar[SLACK_NUM];
 
         for (int i = 0; i < (M + K + 1); i++)
-            s[i] = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "s_" + i);
+            vars[i] = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, baseVarName + "_" + i);
 
-        return s;
-    }
-
-    private static GRBVar[] addAuxiliaryVariables(GRBModel model) throws GRBException {
-        // M == Bi.length() : constraints related to the maximum budget for each television station
-        // K : constraints related to minimum budget for each time slot
-        // 1 : constraint related to minimum total number of spectators (daily)
-        GRBVar[] a = new GRBVar[M + K + 1];
-
-        for (int i = 0; i < (M + K + 1); i++)
-            a[i] = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "a_" + i);
-
-        return a;
-    }
-
-    private static void setAuxiliaryObjectiveFunction(GRBModel model, GRBVar[] y) throws GRBException {
-        // auxiliary objective function is necessary to find a feasible but not optimal solution
-        GRBLinExpr obj = new GRBLinExpr();
-
-        for (int i = 0; i < M; i++) {
-            for (int j = 0; j < K; j++) {
-                obj.addTerm(1.0, y[i]);
-            }
-        }
-
-        model.setObjective(obj);
-        model.set(GRB.IntAttr.ModelSense, GRB.MINIMIZE);
-    }
-
-    private static void setObjectiveFunction(GRBModel model, GRBVar[][] x_ij) throws GRBException {
-        GRBLinExpr sum = new GRBLinExpr();
-        GRBLinExpr reverse_sum = new GRBLinExpr();
-
-        // 1.0 indicates the coefficient of the aux_var in our objective function
-        GRBVar aux_var = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "aux");
-
-        for (int i = 0; i < M; i++) {
-            for (int j = 0; j < K; j++) {
-                int sign = (j < (K/2) ? 1 : -1);
-                sum.addTerm(sign * P_ij[i][j], x_ij[i][j]);
-                reverse_sum.addTerm((-1 * sign) * P_ij[i][j], x_ij[i][j]);
-            }
-        }
-
-        model.addConstr(aux_var, GRB.GREATER_EQUAL, sum, "c_aux1");
-        model.addConstr(aux_var, GRB.GREATER_EQUAL, reverse_sum, "c_aux2");
-
-        GRBLinExpr objFunc = new GRBLinExpr();
-        objFunc.addTerm(1.0, aux_var);
-
-        model.setObjective(objFunc, GRB.MINIMIZE);
+        return vars;
     }
 
     // y array contains variables only if "isAuxiliary" == true, we use it to solve an auxiliary problem
@@ -263,15 +244,52 @@ public class EntryPoint {
         model.addConstr(expr, GRB.EQUAL, S, "c_spectators");
     }
 
-    private static void solve(GRBModel model, int slackNum) throws GRBException {
-        model.update();
-        // to optimize our model
-        model.optimize();
+    private static void setObjectiveFunction(GRBModel model, GRBVar[][] x_ij) throws GRBException {
+        // 'GRBLinExpr' is used to build our function
+        // 'model.setObjective(...)' sets our expression as objective function
+        GRBLinExpr sum = new GRBLinExpr();
+        GRBLinExpr reverse_sum = new GRBLinExpr();
 
+        // 1.0 indicates the coefficient of the aux_var in our objective function
+        GRBVar aux_var = model.addVar(0.0, GRB.INFINITY, 0.0, GRB.CONTINUOUS, "aux");
+
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < K; j++) {
+                int sign = (j < (K/2) ? 1 : -1);
+                sum.addTerm(sign * P_ij[i][j], x_ij[i][j]);
+                reverse_sum.addTerm((-1 * sign) * P_ij[i][j], x_ij[i][j]);
+            }
+        }
+
+        model.addConstr(aux_var, GRB.GREATER_EQUAL, sum, "c_aux1");
+        model.addConstr(aux_var, GRB.GREATER_EQUAL, reverse_sum, "c_aux2");
+
+        GRBLinExpr objFunc = new GRBLinExpr();
+        objFunc.addTerm(1.0, aux_var);
+
+        model.setObjective(objFunc, GRB.MINIMIZE);
+    }
+
+    private static void setAuxiliaryObjectiveFunction(GRBModel model, GRBVar[] y) throws GRBException {
+        // 'GRBLinExpr' is used to build our function
+        // 'model.setObjective(...)' sets our expression as objective function
+        // auxiliary objective function is necessary to find a feasible but not optimal solution
+        GRBLinExpr obj = new GRBLinExpr();
+
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < K; j++) {
+                obj.addTerm(1.0, y[i]);
+            }
+        }
+
+        model.setObjective(obj);
+        model.set(GRB.IntAttr.ModelSense, GRB.MINIMIZE);
+    }
+
+    private static void solve(GRBEnv env, GRBModel model) throws GRBException {
         double objVal, fullCoverage = 0., purchasedTime = 0., usedBudget = 0.;
-        int counter = 0, counterZero = 0;
         String optimalSols = "", vBasisList = "", reducedCostsList = "", constrOpVertex = "", sols1 = "", sols2 = "", sols3 = "";
-        boolean isDegenerate = false;
+        boolean isMultiple = false, isDegenerate = false;
 
         // results can be analyzed with '<constraint>.get(...)' or 'model.get(...)'
         // result of optimization is contained in 'Status' attribute
@@ -280,106 +298,103 @@ public class EntryPoint {
         // 'GRB.DoubleAttr.ObjVal' contains the value of the objective function in current solution
         objVal = model.get(GRB.DoubleAttr.ObjVal);
 
-        // necessary for Question III
-        GRBVar[] vars2 = new GRBVar[model.getVars().length];
+        GRBVar[] vars = model.getVars();
+        double[] varsValues = new double[vars.length];
+        for (int i = 0; i < vars.length-1; i++) {
+            GRBVar var = vars[i];
+            String varName = var.get(GRB.StringAttr.VarName);
+            double varValue = var.get(GRB.DoubleAttr.X);
+            varsValues[i] = varValue;
 
-        for (GRBVar var : model.getVars()) {
-            vars2[counter] = var;
-            double value = var.get(GRB.DoubleAttr.X);
-            optimalSols += var.get(GRB.StringAttr.VarName) + " = " + roundValue(value) + "\n";
+            // optimal solutions list required by Question I
+            optimalSols += varName + " = " + roundValue(varValue) + "\n";
 
-            // we count the number of zeros to check if the optimal solution is multiple
-            if (roundValue(value) == 0)
-                counterZero++;
-
-            if (counter < (M*K)) {
+            // values required by Question I
+            if (i < (M*K)) {
                 // minutes actually purchased
-                purchasedTime += value;
+                purchasedTime += varValue;
                 // budget used
-                usedBudget += value * C_ij[counter / K][counter % K];
+                usedBudget += varValue * C_ij[i / K][i % K];
                 // total number of spectators - converage
-                fullCoverage += value * P_ij[counter / K][counter % K];
+                fullCoverage += varValue * P_ij[i / K][i % K];
             }
-            counter++;
 
-            // list that contains only basis variables
+            // list that will contain only basis variables
             vBasisList += (var.get(GRB.IntAttr.VBasis) == 0 ? 0 : 1) + ", ";
 
             // necessary to verify if the optimal solution is degenerate
-            if (var.get(GRB.IntAttr.VBasis) != 0 && value == 0)
-                isDegenerate = true;
+            if (var.get(GRB.IntAttr.VBasis) != 0) {
+                if (varValue == 0) isDegenerate = true;
+            } else if (var.get(GRB.DoubleAttr.RC) == 0) {
+                isMultiple = true;
+            }
 
-            // list that contains reduced costs
+            // list that will contain reduced costs
             reducedCostsList += var.get(GRB.DoubleAttr.RC) + ", ";
         }
 
-        int t = (M*K);
-        for (GRBConstr constr : model.getConstrs()) {
-            if (t >= (model.getVars().length)-1)
-                break;
-            if (model.getVar(t).get(GRB.DoubleAttr.X) == 0)
+        GRBConstr[] constrs = model.getConstrs();
+        for (int i = M*K; i < (M*K + constrs.length); i++) {
+            if (model.getVar(i).get(GRB.DoubleAttr.X) == 0)
                 // constraints of the optimal vertex
-                constrOpVertex += constr.get(GRB.StringAttr.ConstrName) + ", ";
-            t++;
+                constrOpVertex += constrs[i - M*K].get(GRB.StringAttr.ConstrName) + ", ";
+        }
+
+        // we can arbitrary set iterationLimit (< of previous iterationCount) to get feasible but not optimal solution
+        // in that case we set iterationLimit = IterCount/2 (of previous solution)
+        GRBVar[] notOptimalVars = generateNotOptimalVars(model, model.get(GRB.DoubleAttr.IterCount)/2);
+        double[] notOptimalVarsValues = new double[vars.length];
+        for (int i = 0; i < notOptimalVars.length; i++) {
+            varsValues[i] = notOptimalVars[i].get(GRB.DoubleAttr.X);
+            sols1 += notOptimalVars[i].get(GRB.StringAttr.VarName) + " = " + roundValue(notOptimalVars[i].get(GRB.DoubleAttr.X)) + "\n";
         }
 
         // we create a new model of an auxiliary problem
-        model = new GRBModel(model.getEnv());
-
-        // adding x_ij variables
-        GRBVar[][] x_ij = addVariables(model);
-
-        // adding slack surplus variables
-        GRBVar[] s = addSlackSurplusVariables(model);
-
-        // adding auxiliary variables
-        GRBVar[] y = addAuxiliaryVariables(model);
-
-        // adding budget constraints
-        addBudgetConstraints(model, x_ij, s, y, true);
-
-        // adding minimum spectators number
-        addSpectatorsConstraint(model, x_ij, s, y, true);
-
-        // necessary to set the auxiliary variables with the aim of finding a feasible solution that is not optimal
-        setAuxiliaryObjectiveFunction(model, y);
-
-        model.update();
-
-        // to optimize our model
-        model.optimize();
-
-        // necessary for question 3
-        counter = 0;
-        GRBVar[] vars1 = new GRBVar[M*K + s.length];
-        for (int i = 0; i < M; i++) {
-            for (int j = 0; j < K; j++) {
-                sols1 += x_ij[i][j].get(GRB.StringAttr.VarName) + " = " + roundValue(x_ij[i][j].get(GRB.DoubleAttr.X)) + "\n";
-                vars1[counter] = x_ij[i][j];
-                counter++;
-            }
-        }
-
-        for (int i = 0; i < s.length; i++) {
-            vars1[M*K + i] = s[i];
-            sols1 += s[i].get(GRB.StringAttr.VarName) + " = " + roundValue(s[i].get(GRB.DoubleAttr.X)) + "\n";
-        }
+        model = generateModel(env, true);
 
         for (GRBVar var : model.getVars()) {
             sols2 += var.get(GRB.StringAttr.VarName) + " = " + roundValue(var.get(GRB.DoubleAttr.X)) + "\n";
         }
 
-
-        double[] z = convexCombination(vars1, vars2);
+        double[] z = convexCombination(varsValues, notOptimalVarsValues);
         for (int i = 0; i < z.length; i++)
-            sols3 += vars1[i].get(GRB.StringAttr.VarName) + " = " + roundValue(z[i]) + "\n";
+            sols3 += vars[i].get(GRB.StringAttr.VarName) + " = " + roundValue(z[i]) + "\n";
 
         printHeader();
         printFirstQuestion(objVal, fullCoverage , purchasedTime, (B_TOT - usedBudget), optimalSols);
-        printSecondQuestion(vBasisList, reducedCostsList, (counterZero > slackNum), isDegenerate, constrOpVertex);
+        printSecondQuestion(vBasisList, reducedCostsList, isMultiple, isDegenerate, constrOpVertex);
         printThirdQuestion(sols1, sols2, sols3);
     }
 
+    private static GRBVar[] generateNotOptimalVars(GRBModel model, double iterationLimit) throws GRBException {
+        model.reset();
+
+        // by setting the IterationLimit to a value less than the number of iterations required for the optimal
+        // solution, we will obtain a feasible but not optimal solution
+        model.set(GRB.DoubleParam.IterationLimit, iterationLimit);
+
+        model.update();
+        // to optimize our model
+        model.optimize();
+
+        return model.getVars();
+    }
+
+    private static double[] convexCombination(double[] x, double[] y) {
+        // in this case we take the midpoint, but it can contain an arbitrary value between 0 and 1
+        double lambda = 0.5;
+        double[] z = new double[x.length];
+
+        for (int i = 0; i < x.length; i++) {
+            double xVal = x[i];
+            double yVal = y[i];
+            z[i] = lambda*xVal + (1.-lambda)*yVal;
+        }
+
+        return z;
+    }
+
+    // methods for printing answers to project questions
     private static void printHeader() {
         System.out.println("\n\n\nGRUPPO 10\n" +
                 "Componenti: Baresi, El Koudri");
@@ -411,25 +426,12 @@ public class EntryPoint {
         String solution = "\nQUESITO III:\n" +
                 "Prima soluzione ammissibile ma non ottima:\n" + sols1 +
                 "\nSeconda soluzione ammissibile ma non ottima:\n" + sols2
-                 + "\nTerza soluzione ammissibile ma non ottima:\n" + sols3;
+                + "\nTerza soluzione ammissibile ma non ottima:\n" + sols3;
 
         System.out.println(solution);
-    }
-
-    private static double[] convexCombination(GRBVar[] x, GRBVar[] y) throws GRBException {
-        // in this case we take the midpoint, but it can contain an arbitrary value between 0 and 1
-        double lambda = 0.5;
-        double[] z = new double[x.length];
-
-        for (int i = 0; i < x.length; i++) {
-            z[i] = lambda*x[i].get(GRB.DoubleAttr.X) + (1-lambda)*y[i].get(GRB.DoubleAttr.X);
-        }
-
-        return z;
     }
 
     private static double roundValue(double value) {
         return Math.round(value * 10000.0)/10000.0;
     }
 }
-
